@@ -227,7 +227,8 @@ def render_sidebar(cols):
                         f"分頁日期 **{tdate}**")
                     if st.button(f"🔄 修改為 {tdate}", key=f"fixdt_{i}"):
                         st.session_state.cut_list[i]["vals"]["日期"] = tdate
-                        st.session_state[f"dt_{i}"] = tdate   # 同步更新 widget
+                        # 刪除 widget key，讓下次 rerun 從 value= 重新讀取
+                        st.session_state.pop(f"dt_{i}", None)
                         st.rerun()
 
                 col_a, col_b = st.columns(2)
