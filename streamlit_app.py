@@ -227,10 +227,17 @@ def main():
                         index=TYPE_OPTS.index(vals.get("型態","")) if vals.get("型態","") in TYPE_OPTS else 0,
                         key=f"ty_{i}")
                     tdate = st.selectbox("插入到分頁", date_order, key=f"td_{i}")
-                    rows_preview = ["插入在最前面"] + [
+                    tdf = st.session_state.tab_data.get(tdate, pd.DataFrame())
+                    # 空白列優先顯示
+                    blank_opts = [
+                        f"▶ 空白列 第{j+1}列（貼上覆蓋）"
+                        for j, r in tdf.iterrows()
+                        if all(str(r.get(c,"")).strip() == "" for c in ["店號","店名"])
+                    ]
+                    rows_preview = (blank_opts + ["───────"] +
+                                    ["插入在最前面"] + [
                         f"第{j+1}列後（{r.get('店號','')} {r.get('店名','')}）"
-                        for j, r in st.session_state.tab_data.get(
-                            tdate, pd.DataFrame()).iterrows()]
+                        for j, r in tdf.iterrows()])
                     pos_label = st.selectbox("插入位置", rows_preview, key=f"pos_{i}")
 
                     col_a, col_b = st.columns(2)
@@ -242,13 +249,23 @@ def main():
                             new_row["型態"] = ty_v
                             df = st.session_state.tab_data.get(
                                 tdate, pd.DataFrame(columns=cols))
-                            nr = pd.DataFrame([{c: new_row.get(c,"") for c in cols}])
-                            if pos_label == "插入在最前面":
-                                df = pd.concat([nr, df], ignore_index=True)
+                            nr = {c: new_row.get(c,"") for c in cols}
+
+                            if pos_label.startswith("▶ 空白列"):
+                                # 覆蓋空白列
+                                p = int(pos_label.split("第")[1].split("列")[0]) - 1
+                                for c in cols:
+                                    df.at[p, c] = nr[c]
+                            elif pos_label == "插入在最前面":
+                                df = pd.concat([pd.DataFrame([nr]), df],
+                                               ignore_index=True)
+                            elif pos_label == "───────":
+                                df = pd.concat([df, pd.DataFrame([nr])],
+                                               ignore_index=True)
                             else:
                                 p = int(pos_label.split("第")[1].split("列")[0])
-                                df = pd.concat([df.iloc[:p], nr, df.iloc[p:]],
-                                               ignore_index=True)
+                                df = pd.concat([df.iloc[:p], pd.DataFrame([nr]),
+                                                df.iloc[p:]], ignore_index=True)
                             st.session_state.tab_data[tdate] = df
                             to_remove.append(i)
                             st.rerun()
@@ -329,17 +346,22 @@ def main():
                 hide_index=True,
             )
 
-            # 處理剪下
+            # 處理剪下（保留空白列）
             if cut_clicked:
-                selected = edited[edited["✂"] == True]
-                for _, row in selected.iterrows():
-                    sid   = str(row.get("店號","")).strip()
-                    sname = str(row.get("店名","")).strip()
-                    vals  = {c: str(row.get(c,"")) for c in cols}
-                    st.session_state.cut_list.append(
-                        {"sid": sid, "sname": sname, "vals": vals})
-                keep = edited[edited["✂"] != True][cols].reset_index(drop=True)
-                st.session_state.tab_data[date] = keep
+                result_rows = []
+                for _, row in edited.iterrows():
+                    if row.get("✂") == True:
+                        sid   = str(row.get("店號","")).strip()
+                        sname = str(row.get("店名","")).strip()
+                        vals  = {c: str(row.get(c,"")) for c in cols}
+                        st.session_state.cut_list.append(
+                            {"sid": sid, "sname": sname, "vals": vals})
+                        # 保留空白列
+                        result_rows.append({c: "" for c in cols})
+                    else:
+                        result_rows.append({c: row.get(c,"") for c in cols})
+                st.session_state.tab_data[date] = pd.DataFrame(
+                    result_rows, columns=cols)
                 st.rerun()
 
             # 處理刪除
