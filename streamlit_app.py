@@ -132,36 +132,48 @@ def to_excel(tab_data, date_order):
     return buf.getvalue()
 
 
-def build_grid_options(df, id_col="_row_id"):
-    gb = GridOptionsBuilder.from_dataframe(df)
-    lock_others = JsCode("""
+SEL_COL = "☑"   # 資料型勾選欄：讀 response["data"] 不讀 selected_rows
+
+# 勾選一列時，自動取消其他列的勾選（單選防呆）
+SINGLE_SELECT_SETTER = JsCode("""
 function(params) {
-    var api = params.api;
-    if (!api) return true;
-    var selected = api.getSelectedRows();
-    if (selected.length === 0) return true;
-    return params.node.isSelected();
+    if (params.newValue === true) {
+        params.api.forEachNode(function(node) {
+            if (node.rowIndex !== params.node.rowIndex && node.data['☑']) {
+                node.setDataValue('☑', false);
+            }
+        });
+    }
+    params.data['☑'] = params.newValue;
+    return true;
 }
 """)
+
+
+def build_grid_options(df):
+    gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_grid_options(
         getRowStyle=ROW_STYLE,
         suppressMovableColumns=True,
         suppressColumnMoveAnimation=True,
         rowHeight=32,
-        isRowSelectable=lock_others,
     )
-    # 單選模式（checkbox 直接綁在 午別 欄位，避免被隱藏欄吃掉）
-    gb.configure_selection("single", use_checkbox=False, pre_selected_rows=[])
     gb.configure_default_column(editable=True, resizable=True, sortable=False,
                                 filter=False, suppressMenu=True)
     # 隱藏 _row_id
-    gb.configure_column(id_col, hide=True, editable=False)
+    gb.configure_column("_row_id", hide=True, editable=False)
+    # ☑ 欄：資料型 checkbox，讀 response["data"] 取得勾選狀態（無延遲）
+    gb.configure_column(SEL_COL,
+        editable=True,
+        cellEditor="agCheckboxCellEditor",
+        cellRenderer="agCheckboxCellRenderer",
+        valueSetter=SINGLE_SELECT_SETTER,
+        width=45, minWidth=40, maxWidth=50,
+        headerName="")
     gb.configure_column("午別",
-        checkboxSelection=True,       # checkbox 顯示在此欄
-        headerCheckboxSelection=False,
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": AM_OPTS},
-        width=110, minWidth=90)
+        width=90, minWidth=70)
     gb.configure_column("型態",
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": TYPE_OPTS},
@@ -438,15 +450,16 @@ def main():
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
 
-            # _row_id 用來精確識別每列（避免空白列混淆）
+            # 加入 _row_id（隱藏）和 ☑ 欄（資料型 checkbox，無延遲）
             df_grid = df.copy()
             df_grid.insert(0, "_row_id", range(len(df_grid)))
+            df_grid.insert(1, SEL_COL, False)
 
             grid_opts = build_grid_options(df_grid)
             response  = AgGrid(
                 df_grid,
                 gridOptions=grid_opts,
-                update_mode=GridUpdateMode.NO_UPDATE,
+                update_mode=GridUpdateMode.VALUE_CHANGED,
                 allow_unsafe_jscode=True,
                 theme="balham-dark",
                 use_container_width=True,
@@ -454,43 +467,35 @@ def main():
                 key=f"grid_{date}",
             )
 
-            # 取回編輯後的資料（去掉 _row_id 再存）
+            # 從 response["data"] 讀取（比 selected_rows 即時）
             raw_data = response["data"]
-            if raw_data is not None:
-                edited_df = pd.DataFrame(raw_data)
-                if "_row_id" in edited_df.columns:
-                    st.session_state.tab_data[date] = \
-                        edited_df[cols].reset_index(drop=True)
-            else:
-                edited_df = df_grid
+            edited_df = pd.DataFrame(raw_data) if raw_data is not None else df_grid
 
-            # 解析勾選列（單選，最多 1 列）
-            _sel = response["selected_rows"]
-            if _sel is None:
-                sel_rows = []
-            elif hasattr(_sel, "to_dict"):
-                sel_rows = _sel.to_dict("records")
-            else:
-                sel_rows = list(_sel) if _sel else []
+            # 取得勾選列（讀資料欄，無延遲）
+            sel_mask = edited_df[SEL_COL].astype(bool) \
+                       if SEL_COL in edited_df.columns else pd.Series(False, index=edited_df.index)
+            sel_rows_df = edited_df[sel_mask]
+            sel_id = int(sel_rows_df.iloc[0]["_row_id"]) if len(sel_rows_df) > 0 else None
 
-            sel_id = int(sel_rows[0]["_row_id"]) \
-                     if sel_rows and "_row_id" in sel_rows[0] else None
+            # 儲存編輯（去掉輔助欄）
+            st.session_state.tab_data[date] = \
+                edited_df[cols].reset_index(drop=True)
+
+            # 更新 click_pos（供側邊欄快速插入）
+            if sel_id is not None:
+                r = sel_rows_df.iloc[0]
+                st.session_state.click_pos = {
+                    "date":   date,
+                    "row_id": sel_id,
+                    "label":  (str(r.get("店號","")) + " " +
+                               str(r.get("店名",""))).strip() or "（空白列）",
+                }
 
             st.caption("☑ 勾選一列後，點下方按鈕操作；或到左側剪貼區點「📍 插入到點選位置」")
 
             ba, bb, bc = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下選取列", key=f"cut_{date}")
             del_clicked = bb.button("🗑 刪除選取列", key=f"del_{date}")
-
-            # 按鈕觸發時同步更新 click_pos（供側邊欄快速插入）
-            if sel_id is not None and (cut_clicked or del_clicked or True):
-                sel_name = (str(sel_rows[0].get("店號","")) + " " +
-                            str(sel_rows[0].get("店名",""))).strip()
-                st.session_state.click_pos = {
-                    "date":   date,
-                    "row_id": sel_id,
-                    "label":  sel_name or "（空白列）",
-                }
 
             if sel_id is None and (cut_clicked or del_clicked):
                 bc.warning("請先在表格中勾選一列")
