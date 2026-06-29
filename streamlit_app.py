@@ -219,6 +219,16 @@ def render_sidebar(cols):
                 pos_label = st.selectbox("插入位置",
                     row_opts, key=f"pos_{i}")
 
+                # ── 日期不符提示 ──────────────────────
+                date_ok = (not dt_v) or (dt_v == tdate)
+                if not date_ok:
+                    st.warning(
+                        f"⚠️ 日期不符：資料日期 **{dt_v}**，"
+                        f"分頁日期 **{tdate}**")
+                    if st.button(f"🔄 修改為 {tdate}", key=f"fixdt_{i}"):
+                        st.session_state.cut_list[i]["vals"]["日期"] = tdate
+                        st.rerun()
+
                 col_a, col_b = st.columns(2)
                 with col_a:
                     if st.button("✅ 插入", key=f"ins_{i}"):
