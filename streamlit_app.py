@@ -132,22 +132,7 @@ def to_excel(tab_data, date_order):
     return buf.getvalue()
 
 
-SEL_COL = "☑"   # 資料型勾選欄：讀 response["data"] 不讀 selected_rows
-
-# 勾選一列時，自動取消其他列的勾選（單選防呆）
-SINGLE_SELECT_SETTER = JsCode("""
-function(params) {
-    if (params.newValue === true) {
-        params.api.forEachNode(function(node) {
-            if (node.rowIndex !== params.node.rowIndex && node.data['☑']) {
-                node.setDataValue('☑', false);
-            }
-        });
-    }
-    params.data['☑'] = params.newValue;
-    return true;
-}
-""")
+SEL_COL = "☑"   # 保留常數供相容性，實際改用內建 rowSelection
 
 
 def build_grid_options(df):
@@ -162,14 +147,10 @@ def build_grid_options(df):
                                 filter=False, suppressMenu=True)
     # 隱藏 _row_id
     gb.configure_column("_row_id", hide=True, editable=False)
-    # ☑ 欄：資料型 checkbox，讀 response["data"] 取得勾選狀態（無延遲）
-    gb.configure_column(SEL_COL,
-        editable=True,
-        cellEditor="agCheckboxCellEditor",
-        cellRenderer="agCheckboxCellRenderer",
-        valueSetter=SINGLE_SELECT_SETTER,
-        width=45, minWidth=40, maxWidth=50,
-        headerName="")
+    # 單選模式：checkbox 顯示在午別欄左側
+    gb.configure_selection(selection_mode="single",
+                           use_checkbox=True,
+                           pre_selected_rows=[])
     gb.configure_column("午別",
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": AM_OPTS},
@@ -450,22 +431,28 @@ def main():
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
 
-            # 從 session_state 恢復上次勾選的 row_id（跨 rerun 保持勾選）
+            # 加入隱藏 _row_id 供精準比對
             sel_key = f"sel_{date}"
             stored_sel = st.session_state.get(sel_key)
 
-            # 加入 _row_id（隱藏）和 ☑ 欄，依 stored_sel 恢復勾選狀態
             df_grid = df.copy()
             df_grid.insert(0, "_row_id", range(len(df_grid)))
-            df_grid.insert(1, SEL_COL,
-                           df_grid["_row_id"] == stored_sel if stored_sel is not None
-                           else False)
+
+            # 預先選取上次勾選的列
+            pre_sel = []
+            if stored_sel is not None:
+                matches = df_grid.index[df_grid["_row_id"] == stored_sel].tolist()
+                if matches:
+                    pre_sel = [matches[0]]
 
             grid_opts = build_grid_options(df_grid)
-            response  = AgGrid(
+            # 把 pre_selected_rows 寫入 gridOptions
+            grid_opts["preSelectedRows"] = pre_sel
+
+            response = AgGrid(
                 df_grid,
                 gridOptions=grid_opts,
-                update_mode=GridUpdateMode.VALUE_CHANGED,
+                update_mode=GridUpdateMode.SELECTION_CHANGED,
                 allow_unsafe_jscode=True,
                 theme="dark",
                 use_container_width=True,
@@ -474,7 +461,7 @@ def main():
                 key=f"grid_{date}",
             )
 
-            # 從 response["data"] 讀取最新狀態
+            # 讀取編輯後的資料
             raw_data = response["data"]
             if raw_data is None:
                 edited_df = df_grid
@@ -485,41 +472,45 @@ def main():
             else:
                 edited_df = df_grid
 
-            # 取得勾選列（JSON 模式可能回傳字串 "True"/"False"，需統一處理）
-            if SEL_COL in edited_df.columns:
-                sel_mask = edited_df[SEL_COL].map(
-                    lambda v: str(v).strip().lower() in ("true", "1", "yes")
-                )
+            # 讀取選取列（selected_rows 在 1.2.1 回傳 DataFrame 或 list）
+            sel_rows_raw = response["selected_rows"]
+            if sel_rows_raw is None:
+                sel_rows_df = pd.DataFrame()
+            elif isinstance(sel_rows_raw, pd.DataFrame):
+                sel_rows_df = sel_rows_raw
             else:
-                sel_mask = pd.Series(False, index=edited_df.index)
-            sel_rows_df = edited_df[sel_mask]
-            sel_id = int(sel_rows_df.iloc[0]["_row_id"]) \
-                     if len(sel_rows_df) > 0 else None
+                sel_rows_df = pd.DataFrame(sel_rows_raw)
 
-            # 更新 session_state 選取記憶（勾選/取消都記錄）
+            if len(sel_rows_df) > 0 and "_row_id" in sel_rows_df.columns:
+                sel_id = int(sel_rows_df.iloc[0]["_row_id"])
+            else:
+                sel_id = stored_sel   # selection 沒變化時保留上次
+
+            # 更新 session_state 選取記憶
             st.session_state[sel_key] = sel_id
 
             # 儲存編輯（去掉輔助欄）
             st.session_state.tab_data[date] = \
                 edited_df[cols].reset_index(drop=True)
 
-            # 更新 click_pos（供側邊欄快速插入）
+            # 取得選取列的資料（sel_rows_df 可能為空，用 edited_df 補回）
             if sel_id is not None:
-                r = sel_rows_df.iloc[0]
+                sel_row_data = edited_df[edited_df["_row_id"] == sel_id]
+                if len(sel_row_data) > 0:
+                    r = sel_row_data.iloc[0]
+                    sel_label = (str(r.get("店號","")) + " " +
+                                 str(r.get("店名",""))).strip() or "（空白列）"
+                else:
+                    sel_label = f"第{sel_id+1}列"
+                    r = None
                 st.session_state.click_pos = {
                     "date":   date,
                     "row_id": sel_id,
-                    "label":  (str(r.get("店號","")) + " " +
-                               str(r.get("店名",""))).strip() or "（空白列）",
+                    "label":  sel_label,
                 }
-
-            # 顯示目前選取狀態
-            if sel_id is not None:
-                r = sel_rows_df.iloc[0]
-                sel_label = (str(r.get("店號","")) + " " +
-                             str(r.get("店名",""))).strip() or "（空白列）"
                 st.caption(f"✅ 已選取：{sel_label}　｜　再按下方按鈕操作")
             else:
+                r = None
                 st.caption("☑ 勾選一列後，點下方按鈕操作")
 
             ba, bb, bc = st.columns([1, 1, 4])
