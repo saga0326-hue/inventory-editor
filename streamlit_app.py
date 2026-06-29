@@ -402,8 +402,14 @@ def main():
                         if response["data"] is not None else df
             st.session_state.tab_data[date] = edited_df.reset_index(drop=True)
 
-            # 取得勾選列
-            sel_rows = response["selected_rows"] or []
+            # 取得勾選列（新版 aggrid 回傳 DataFrame，需轉成 list of dict）
+            _sel = response["selected_rows"]
+            if _sel is None:
+                sel_rows = []
+            elif hasattr(_sel, "to_dict"):
+                sel_rows = _sel.to_dict("records")
+            else:
+                sel_rows = list(_sel) if _sel else []
 
             ba, bb, _ = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下勾選列", key=f"cut_{date}")
