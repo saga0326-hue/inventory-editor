@@ -10,15 +10,11 @@ st.markdown("""
 <style>
 [data-testid="stSidebar"] { background:#2e1e1e; }
 [data-testid="stSidebar"] * { color:#cdd6f4; }
-.dup-bar { background:#3a1010; border-radius:8px; padding:10px 16px; margin-bottom:8px; }
+.dup-bar  { background:#3a1010; border-radius:8px; padding:10px 16px; margin-bottom:8px; }
 .dup-chip { background:#5a1a1a; border-radius:6px; padding:6px 12px;
             display:inline-block; margin:3px; }
 .dup-id   { color:#ff5555; font-weight:bold; font-size:13px; }
 .dup-date { color:#f39c12; font-size:12px; }
-.cut-chip { background:#3d2020; border-radius:6px; padding:8px 10px; margin:4px 0; }
-.cut-id   { color:#5e9bfa; font-weight:bold; font-size:13px; }
-.cut-tag  { color:#f39c12; font-size:12px; }
-div[data-testid="stDataEditor"] { border-radius:8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -32,7 +28,7 @@ FIELD_MAP = {
     "備註":           "備註",
     "課別":           "課別",
 }
-COLS = list(FIELD_MAP.values())
+COLS      = list(FIELD_MAP.values())
 TYPE_OPTS = ["", "閉", "轉", "解", "續", "FC", "RC"]
 AM_OPTS   = ["", "上午", "下午"]
 
@@ -46,9 +42,11 @@ def fmt_date(v):
 
 
 def init():
-    for k, d in [("tab_data", {}), ("date_order", []), ("cut_list", [])]:
+    defaults = {"tab_data": {}, "date_order": [], "cut_list": [],
+                "inv_key": "", "chg_key": ""}
+    for k, v in defaults.items():
         if k not in st.session_state:
-            st.session_state[k] = d
+            st.session_state[k] = v
 
 
 def load_inventory(file):
@@ -63,8 +61,8 @@ def load_inventory(file):
         df["日期"] = df["日期"].map(fmt_date)
     tab_data, date_order = {}, []
     if "日期" in df.columns:
-        df["_s"] = pd.to_datetime(df["日期"].map(
-            lambda v: f"2026/{v}"), errors="coerce")
+        df["_s"] = pd.to_datetime(
+            df["日期"].map(lambda v: f"2026/{v}"), errors="coerce")
         ordered = df.drop_duplicates("日期").sort_values("_s")["日期"].tolist()
         df = df.drop(columns=["_s"])
         for d in ordered:
@@ -82,9 +80,10 @@ def load_change(file, cols):
                "店名":"店名","型態":"型態","備註":"備註"}
     entries = []
     for _, row in df.iterrows():
-        sid = str(row.get("店號","")).strip()
+        sid   = str(row.get("店號","")).strip()
         sname = str(row.get("店名","")).strip()
-        if not sid and not sname: continue
+        if not sid and not sname:
+            continue
         vals = {c: "" for c in cols}
         for src, dst in col_map.items():
             if src in df.columns and dst in cols:
@@ -99,13 +98,16 @@ def load_change(file, cols):
 
 
 def find_dups(tab_data):
+    """掃描所有分頁，回傳 {店號: [(日期, 店名), ...]} (只含重複)"""
     store_map = defaultdict(list)
     for date, df in tab_data.items():
-        if "店號" not in df.columns: continue
+        if "店號" not in df.columns:
+            continue
         for _, row in df.iterrows():
             sid   = str(row.get("店號","")).strip()
             sname = str(row.get("店名","")).strip()
-            if sid:
+            # 忽略空白列
+            if sid and sid != "nan":
                 store_map[sid].append((date, sname))
     return {s: e for s, e in store_map.items() if len(e) > 1}
 
@@ -119,8 +121,8 @@ def to_excel(tab_data, date_order):
     return buf.getvalue()
 
 
-def col_config(cols):
-    cfg = {}
+def get_col_config(cols):
+    cfg = {"✂": st.column_config.CheckboxColumn("選取", width="small", default=False)}
     for c in cols:
         if c == "午別":
             cfg[c] = st.column_config.SelectboxColumn(c, options=AM_OPTS, width="small")
@@ -128,11 +130,8 @@ def col_config(cols):
             cfg[c] = st.column_config.SelectboxColumn(c, options=TYPE_OPTS, width="small")
         elif c in ("日期","店號","課別"):
             cfg[c] = st.column_config.TextColumn(c, width="small")
-        elif c in ("店名","預定盤點者"):
-            cfg[c] = st.column_config.TextColumn(c, width="medium")
         else:
             cfg[c] = st.column_config.TextColumn(c, width="medium")
-    cfg["✂"] = st.column_config.CheckboxColumn("選取", width="small", default=False)
     return cfg
 
 
@@ -142,31 +141,40 @@ def main():
     st.title("📋 盤點資料編輯器")
 
     # ── 工具列 ────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns([2, 2, 2, 4])
+    c1, c2, c3 = st.columns([2, 2, 2])
+
     with c1:
         inv_file = st.file_uploader("📂 匯入盤點表", type=["xlsx","xls"],
                                     label_visibility="collapsed")
         if inv_file:
-            td, do = load_inventory(inv_file)
-            st.session_state.tab_data   = td
-            st.session_state.date_order = do
-            st.success(f"載入 {len(do)} 個日期分頁")
+            file_key = f"{inv_file.name}_{inv_file.size}"
+            if st.session_state.inv_key != file_key:
+                st.session_state.inv_key = file_key
+                td, do = load_inventory(inv_file)
+                st.session_state.tab_data   = td
+                st.session_state.date_order = do
+                st.success(f"載入 {len(do)} 個日期分頁")
 
     with c2:
         chg_file = st.file_uploader("📋 匯入異動名單", type=["xlsx","xls"],
                                     label_visibility="collapsed")
         if chg_file and st.session_state.tab_data:
-            cols = list(list(st.session_state.tab_data.values())[0].columns)
-            entries = load_change(chg_file, cols)
-            st.session_state.cut_list.extend(entries)
-            st.success(f"異動名單載入 {len(entries)} 筆")
+            file_key = f"{chg_file.name}_{chg_file.size}"
+            if st.session_state.chg_key != file_key:
+                st.session_state.chg_key = file_key
+                cols    = list(list(st.session_state.tab_data.values())[0].columns)
+                entries = load_change(chg_file, cols)
+                st.session_state.cut_list.extend(entries)
+                st.success(f"異動名單載入 {len(entries)} 筆至左側剪貼區")
 
     with c3:
         if st.session_state.tab_data:
             st.download_button("💾 另存新檔",
-                data=to_excel(st.session_state.tab_data, st.session_state.date_order),
+                data=to_excel(st.session_state.tab_data,
+                              st.session_state.date_order),
                 file_name="盤點表_已編輯.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                mime="application/vnd.openxmlformats-officedocument"
+                     ".spreadsheetml.sheet")
 
     if not st.session_state.tab_data:
         st.info("請先匯入盤點表 Excel 檔案。")
@@ -178,27 +186,31 @@ def main():
     dups = find_dups(st.session_state.tab_data)
     if dups:
         chips = "".join(
-            f'<div class="dup-chip"><div class="dup-id">{sid} {ents[0][1]}</div>'
-            f'<div class="dup-date">出現於：{"、".join(e[0] for e in ents)}</div></div>'
+            f'<div class="dup-chip">'
+            f'<div class="dup-id">{sid} {ents[0][1]}</div>'
+            f'<div class="dup-date">出現於：{"、".join(e[0] for e in ents)}</div>'
+            f'</div>'
             for sid, ents in sorted(dups.items()))
         st.markdown(
-            f'<div class="dup-bar">⚠️ <b style="color:#ff5555">重複店號：共 {len(dups)} 間</b><br>{chips}</div>',
+            f'<div class="dup-bar">⚠️ <b style="color:#ff5555">'
+            f'重複店號：共 {len(dups)} 間</b><br>{chips}</div>',
             unsafe_allow_html=True)
+    else:
+        st.success("✅ 無重複店號")
 
     # ── 搜尋列 ────────────────────────────────────────
-    search_kw = st.text_input("🔍 搜尋（跨所有分頁）", placeholder="輸入店號、店名、日期…")
+    search_kw = st.text_input("🔍 搜尋（跨所有分頁）",
+                               placeholder="輸入店號、店名、日期…")
     if search_kw:
         results = []
         for date, df in st.session_state.tab_data.items():
             mask = df.apply(
-                lambda r: search_kw.lower() in " ".join(str(v) for v in r).lower(), axis=1)
-            cnt = mask.sum()
-            if cnt:
-                results.append(f"**{date}**：{cnt} 筆")
-        if results:
-            st.info("🔍 找到  " + "　｜　".join(results))
-        else:
-            st.warning(f"找不到「{search_kw}」")
+                lambda r: search_kw.lower() in
+                " ".join(str(v) for v in r).lower(), axis=1)
+            if mask.any():
+                results.append(f"**{date}**：{mask.sum()} 筆")
+        st.info("🔍 " + "　｜　".join(results) if results
+                else f"找不到「{search_kw}」")
 
     st.divider()
 
@@ -210,72 +222,81 @@ def main():
         else:
             date_order = st.session_state.date_order
             cols = list(list(st.session_state.tab_data.values())[0].columns)
-            to_remove = []
 
-            for i, entry in enumerate(st.session_state.cut_list):
+            for i, entry in enumerate(list(st.session_state.cut_list)):
                 sid, sname = entry["sid"], entry["sname"]
                 vals = entry["vals"]
                 tag  = "  ".join(filter(None, [vals.get("日期",""),
                                                vals.get("午別",""),
                                                vals.get("型態","")]))
-                with st.expander(f"**{sid}** {sname}" + (f" ｜ {tag}" if tag else "")):
+                with st.expander(f"**{sid}** {sname}" +
+                                 (f" ｜ {tag}" if tag else "")):
                     am_v = st.selectbox("午別", AM_OPTS,
-                        index=AM_OPTS.index(vals.get("午別","")) if vals.get("午別","") in AM_OPTS else 0,
+                        index=AM_OPTS.index(vals.get("午別",""))
+                              if vals.get("午別","") in AM_OPTS else 0,
                         key=f"am_{i}")
-                    dt_v = st.text_input("日期", value=vals.get("日期",""), key=f"dt_{i}")
+                    dt_v = st.text_input("日期",
+                        value=vals.get("日期",""), key=f"dt_{i}")
                     ty_v = st.selectbox("型態", TYPE_OPTS,
-                        index=TYPE_OPTS.index(vals.get("型態","")) if vals.get("型態","") in TYPE_OPTS else 0,
+                        index=TYPE_OPTS.index(vals.get("型態",""))
+                              if vals.get("型態","") in TYPE_OPTS else 0,
                         key=f"ty_{i}")
-                    tdate = st.selectbox("插入到分頁", date_order, key=f"td_{i}")
-                    tdf = st.session_state.tab_data.get(tdate, pd.DataFrame())
-                    # 空白列優先顯示
+
+                    tdate = st.selectbox("插入到分頁",
+                        date_order, key=f"td_{i}")
+                    tdf   = st.session_state.tab_data.get(tdate, pd.DataFrame())
+
+                    # 空白列優先
                     blank_opts = [
-                        f"▶ 空白列 第{j+1}列（貼上覆蓋）"
+                        f"▶ 空白列 第{j+1}列（覆蓋）"
                         for j, r in tdf.iterrows()
-                        if all(str(r.get(c,"")).strip() == "" for c in ["店號","店名"])
+                        if all(str(r.get(c,"")).strip() in ("","nan")
+                               for c in ["店號","店名"])
                     ]
-                    rows_preview = (blank_opts + ["───────"] +
-                                    ["插入在最前面"] + [
-                        f"第{j+1}列後（{r.get('店號','')} {r.get('店名','')}）"
-                        for j, r in tdf.iterrows()])
-                    pos_label = st.selectbox("插入位置", rows_preview, key=f"pos_{i}")
+                    row_opts = (blank_opts +
+                                (["───────"] if blank_opts else []) +
+                                ["插入在最前面"] +
+                                [f"第{j+1}列後（{str(r.get('店號',''))} "
+                                 f"{str(r.get('店名',''))}）"
+                                 for j, r in tdf.iterrows()])
+                    pos_label = st.selectbox("插入位置",
+                        row_opts, key=f"pos_{i}")
 
                     col_a, col_b = st.columns(2)
                     with col_a:
                         if st.button("✅ 插入", key=f"ins_{i}"):
-                            new_row = dict(vals)
-                            new_row["午別"] = am_v
-                            new_row["日期"] = dt_v
-                            new_row["型態"] = ty_v
+                            new_vals = dict(vals)
+                            new_vals.update({"午別": am_v,
+                                             "日期": dt_v,
+                                             "型態": ty_v})
                             df = st.session_state.tab_data.get(
-                                tdate, pd.DataFrame(columns=cols))
-                            nr = {c: new_row.get(c,"") for c in cols}
+                                tdate, pd.DataFrame(columns=cols)).copy()
+                            nr = pd.DataFrame(
+                                [{c: new_vals.get(c,"") for c in cols}])
 
                             if pos_label.startswith("▶ 空白列"):
-                                # 覆蓋空白列
-                                p = int(pos_label.split("第")[1].split("列")[0]) - 1
+                                p = int(pos_label.split("第")[1]
+                                        .split("列")[0]) - 1
                                 for c in cols:
-                                    df.at[p, c] = nr[c]
-                            elif pos_label == "插入在最前面":
-                                df = pd.concat([pd.DataFrame([nr]), df],
-                                               ignore_index=True)
-                            elif pos_label == "───────":
-                                df = pd.concat([df, pd.DataFrame([nr])],
-                                               ignore_index=True)
+                                    df.at[p, c] = new_vals.get(c,"")
+                            elif pos_label in ("插入在最前面", "───────"):
+                                df = pd.concat([nr, df], ignore_index=True)
                             else:
-                                p = int(pos_label.split("第")[1].split("列")[0])
-                                df = pd.concat([df.iloc[:p], pd.DataFrame([nr]),
-                                                df.iloc[p:]], ignore_index=True)
+                                p = int(pos_label.split("第")[1]
+                                        .split("列")[0])
+                                df = pd.concat(
+                                    [df.iloc[:p], nr, df.iloc[p:]],
+                                    ignore_index=True)
+
                             st.session_state.tab_data[tdate] = df
-                            to_remove.append(i)
-                            st.rerun()
-                    with col_b:
-                        if st.button("🗑 移除", key=f"rm_{i}"):
-                            to_remove.append(i)
+                            # 直接移除，不用 to_remove
+                            st.session_state.cut_list.pop(i)
                             st.rerun()
 
-            for i in sorted(set(to_remove), reverse=True):
-                st.session_state.cut_list.pop(i)
+                    with col_b:
+                        if st.button("🗑 移除", key=f"rm_{i}"):
+                            st.session_state.cut_list.pop(i)
+                            st.rerun()
 
     # ── 分頁資料表 ────────────────────────────────────
     date_order = st.session_state.date_order
@@ -283,63 +304,69 @@ def main():
 
     for tab, date in zip(tabs, date_order):
         with tab:
-            df = st.session_state.tab_data[date].copy()
+            df   = st.session_state.tab_data[date].copy()
+            cols = list(df.columns)
 
             # 搜尋高亮提示
             if search_kw:
                 mask = df.apply(
-                    lambda r: search_kw.lower() in " ".join(str(v) for v in r).lower(), axis=1)
+                    lambda r: search_kw.lower() in
+                    " ".join(str(v) for v in r).lower(), axis=1)
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
-
-            # 加入勾選欄
-            df.insert(0, "✂", False)
-            cols = [c for c in df.columns if c != "✂"]
 
             # ── 新增列表單 ────────────────────────────
             with st.expander("➕ 新增一列"):
                 fc = st.columns(3)
-                new_am   = fc[0].selectbox("午別", AM_OPTS,   key=f"new_am_{date}")
-                new_date = fc[1].text_input("日期", value=date, key=f"new_dt_{date}")
-                new_id   = fc[2].text_input("店號",            key=f"new_id_{date}")
+                new_am   = fc[0].selectbox("午別", AM_OPTS,
+                                            key=f"n_am_{date}")
+                new_date = fc[1].text_input("日期", value=date,
+                                             key=f"n_dt_{date}")
+                new_id   = fc[2].text_input("店號", key=f"n_id_{date}")
                 fc2 = st.columns(3)
-                new_name = fc2[0].text_input("店名",           key=f"new_nm_{date}")
-                new_type = fc2[1].selectbox("型態", TYPE_OPTS, key=f"new_ty_{date}")
-                new_note = fc2[2].text_input("備註",           key=f"new_nt_{date}")
+                new_name = fc2[0].text_input("店名", key=f"n_nm_{date}")
+                new_type = fc2[1].selectbox("型態", TYPE_OPTS,
+                                             key=f"n_ty_{date}")
+                new_note = fc2[2].text_input("備註", key=f"n_nt_{date}")
 
-                ins_pos = st.selectbox(
-                    "插入位置",
-                    ["插入在最前面"] + [
-                        f"第{j+1}列後（{r.get('店號','')} {r.get('店名','')}）"
-                        for j, r in df[cols].iterrows()],
-                    key=f"new_pos_{date}")
+                ins_opts = ["插入在最前面"] + [
+                    f"第{j+1}列後（{str(r.get('店號',''))} "
+                    f"{str(r.get('店名',''))}）"
+                    for j, r in df.iterrows()]
+                ins_pos = st.selectbox("插入位置", ins_opts,
+                                       key=f"n_pos_{date}")
 
                 if st.button("確定新增", key=f"add_{date}"):
-                    new_row = {c: "" for c in cols}
-                    new_row.update({"午別": new_am, "日期": new_date,
-                                    "店號": new_id, "店名": new_name,
-                                    "型態": new_type, "備註": new_note})
-                    nr = pd.DataFrame([new_row])
-                    base = st.session_state.tab_data[date]
+                    nr = pd.DataFrame([{c: "" for c in cols}])
+                    nr["午別"] = new_am
+                    nr["日期"] = new_date
+                    if "店號" in cols: nr["店號"] = new_id
+                    if "店名" in cols: nr["店名"] = new_name
+                    if "型態" in cols: nr["型態"] = new_type
+                    if "備註" in cols: nr["備註"] = new_note
+
                     if ins_pos == "插入在最前面":
-                        st.session_state.tab_data[date] = pd.concat(
-                            [nr, base], ignore_index=True)
+                        df = pd.concat([nr, df], ignore_index=True)
                     else:
                         p = int(ins_pos.split("第")[1].split("列")[0])
-                        st.session_state.tab_data[date] = pd.concat(
-                            [base.iloc[:p], nr, base.iloc[p:]], ignore_index=True)
+                        df = pd.concat([df.iloc[:p], nr, df.iloc[p:]],
+                                       ignore_index=True)
+                    st.session_state.tab_data[date] = df
                     st.rerun()
 
             # ── 剪下 / 刪除按鈕 ──────────────────────
-            ba, bb = st.columns([1, 1])
+            ba, bb, _ = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下勾選列", key=f"cut_{date}")
             del_clicked = bb.button("🗑 刪除勾選列", key=f"del_{date}")
 
-            # ── 資料表 ───────────────────────────────
+            # 加入勾選欄
+            df_show = df.copy()
+            df_show.insert(0, "✂", False)
+
             edited = st.data_editor(
-                df,
+                df_show,
                 key=f"ed_{date}",
-                column_config=col_config(cols),
+                column_config=get_col_config(cols),
                 column_order=["✂"] + cols,
                 num_rows="dynamic",
                 use_container_width=True,
@@ -356,7 +383,6 @@ def main():
                         vals  = {c: str(row.get(c,"")) for c in cols}
                         st.session_state.cut_list.append(
                             {"sid": sid, "sname": sname, "vals": vals})
-                        # 保留空白列
                         result_rows.append({c: "" for c in cols})
                     else:
                         result_rows.append({c: row.get(c,"") for c in cols})
@@ -365,16 +391,21 @@ def main():
                 st.rerun()
 
             # 處理刪除
-            if del_clicked:
+            elif del_clicked:
                 keep = edited[edited["✂"] != True][cols].reset_index(drop=True)
                 st.session_state.tab_data[date] = keep
                 st.rerun()
 
-            # 儲存編輯結果
-            if not cut_clicked and not del_clicked:
-                st.session_state.tab_data[date] = edited[cols].reset_index(drop=True)
+            # 儲存一般編輯
+            else:
+                st.session_state.tab_data[date] = \
+                    edited[cols].reset_index(drop=True)
 
-            st.caption(f"共 {len(st.session_state.tab_data[date])} 列　｜　"
+            total = len(st.session_state.tab_data[date])
+            blank = (st.session_state.tab_data[date]
+                     .apply(lambda r: all(str(v).strip() in ("","nan")
+                                         for v in r), axis=1).sum())
+            st.caption(f"共 {total} 列，其中 {blank} 列空白　｜　"
                        "勾選列後點「✂ 剪下」或「🗑 刪除」")
 
 
