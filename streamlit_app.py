@@ -469,6 +469,7 @@ def main():
                 allow_unsafe_jscode=True,
                 theme="dark",
                 use_container_width=True,
+                use_json_serialization=True,
                 height=min(60 + len(df) * 33, 800),
                 key=f"grid_{date}",
             )
