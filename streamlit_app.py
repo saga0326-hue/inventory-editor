@@ -385,9 +385,20 @@ def main():
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
 
-            grid_opts = build_grid_options(df)
+            # 加入隱藏的 _row_id 供精確比對（避免空白列互相干擾）
+            df_with_id = df.copy()
+            df_with_id.insert(0, "_row_id", range(len(df_with_id)))
+
+            grid_opts = build_grid_options(df_with_id)
+            # 隱藏 _row_id 欄位
+            for col_def in grid_opts["columnDefs"]:
+                if col_def.get("field") == "_row_id":
+                    col_def["hide"] = True
+                    col_def["editable"] = False
+                    break
+
             response  = AgGrid(
-                df,
+                df_with_id,
                 gridOptions=grid_opts,
                 update_mode=GridUpdateMode.MODEL_CHANGED,
                 allow_unsafe_jscode=True,
@@ -397,10 +408,15 @@ def main():
                 key=f"grid_{date}",
             )
 
-            # 取回編輯後的資料並儲存
-            edited_df = pd.DataFrame(response["data"])[cols] \
-                        if response["data"] is not None else df
-            st.session_state.tab_data[date] = edited_df.reset_index(drop=True)
+            # 取回編輯後的資料（去掉 _row_id）
+            raw_data = response["data"]
+            if raw_data is not None:
+                edited_df = pd.DataFrame(raw_data)
+                # 保存編輯（不含 _row_id）
+                st.session_state.tab_data[date] = \
+                    edited_df[cols].reset_index(drop=True)
+            else:
+                edited_df = df_with_id
 
             # 取得勾選列（新版 aggrid 回傳 DataFrame，需轉成 list of dict）
             _sel = response["selected_rows"]
@@ -411,17 +427,19 @@ def main():
             else:
                 sel_rows = list(_sel) if _sel else []
 
+            # 用 _row_id 精確比對選取列
+            sel_ids = {int(r["_row_id"]) for r in sel_rows
+                       if "_row_id" in r}
+
             ba, bb, _ = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下勾選列", key=f"cut_{date}")
             del_clicked = bb.button("🗑 刪除勾選列", key=f"del_{date}")
 
-            if sel_rows and cut_clicked:
-                sel_keys = {(str(r.get("店號","")), str(r.get("店名","")))
-                            for r in sel_rows}
+            if sel_ids and cut_clicked:
                 result_rows = []
                 for _, row in edited_df.iterrows():
-                    k = (str(row.get("店號","")), str(row.get("店名","")))
-                    if k in sel_keys:
+                    rid = int(row.get("_row_id", -1))
+                    if rid in sel_ids:
                         vals = {c: str(row.get(c,"")) for c in cols}
                         st.session_state.cut_list.append({
                             "sid":   str(row.get("店號","")),
@@ -436,16 +454,14 @@ def main():
                     result_rows, columns=cols)
                 st.rerun()
 
-            elif sel_rows and del_clicked:
-                sel_keys = {(str(r.get("店號","")), str(r.get("店名","")))
-                            for r in sel_rows}
-                keep = edited_df[
-                    ~edited_df.apply(
-                        lambda r: (str(r.get("店號","")),
-                                   str(r.get("店名",""))) in sel_keys,
-                        axis=1)
-                ].reset_index(drop=True)
-                st.session_state.tab_data[date] = keep
+            elif sel_ids and del_clicked:
+                keep_rows = [
+                    {c: row.get(c,"") for c in cols}
+                    for _, row in edited_df.iterrows()
+                    if int(row.get("_row_id", -1)) not in sel_ids
+                ]
+                st.session_state.tab_data[date] = pd.DataFrame(
+                    keep_rows, columns=cols)
                 st.rerun()
 
             total = len(st.session_state.tab_data[date])
