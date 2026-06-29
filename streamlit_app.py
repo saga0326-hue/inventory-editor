@@ -446,7 +446,7 @@ def main():
             response  = AgGrid(
                 df_grid,
                 gridOptions=grid_opts,
-                update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+                update_mode=GridUpdateMode.NO_UPDATE,
                 allow_unsafe_jscode=True,
                 theme="balham-dark",
                 use_container_width=True,
@@ -476,8 +476,14 @@ def main():
             sel_id = int(sel_rows[0]["_row_id"]) \
                      if sel_rows and "_row_id" in sel_rows[0] else None
 
-            # 點選列時更新 click_pos（供側邊欄快速插入使用）
-            if sel_id is not None:
+            st.caption("☑ 勾選一列後，點下方按鈕操作；或到左側剪貼區點「📍 插入到點選位置」")
+
+            ba, bb, bc = st.columns([1, 1, 4])
+            cut_clicked = ba.button("✂ 剪下選取列", key=f"cut_{date}")
+            del_clicked = bb.button("🗑 刪除選取列", key=f"del_{date}")
+
+            # 按鈕觸發時同步更新 click_pos（供側邊欄快速插入）
+            if sel_id is not None and (cut_clicked or del_clicked or True):
                 sel_name = (str(sel_rows[0].get("店號","")) + " " +
                             str(sel_rows[0].get("店名",""))).strip()
                 st.session_state.click_pos = {
@@ -485,17 +491,9 @@ def main():
                     "row_id": sel_id,
                     "label":  sel_name or "（空白列）",
                 }
-                st.caption(f"✅ 已選取：{sel_name or '（空白列）'}　｜　"
-                           "可到左側剪貼區點「📍 插入到點選位置」")
-            else:
-                st.caption("👆 點擊表格中的列以選取，再按下方按鈕操作")
-
-            ba, bb, bc = st.columns([1, 1, 4])
-            cut_clicked = ba.button("✂ 剪下選取列", key=f"cut_{date}")
-            del_clicked = bb.button("🗑 刪除選取列", key=f"del_{date}")
 
             if sel_id is None and (cut_clicked or del_clicked):
-                bc.warning("請先點擊表格中的一列來選取")
+                bc.warning("請先在表格中勾選一列")
 
             elif sel_id is not None and cut_clicked:
                 result_rows = []
