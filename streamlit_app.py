@@ -476,7 +476,14 @@ def main():
 
             # 從 response["data"] 讀取最新狀態
             raw_data = response["data"]
-            edited_df = pd.DataFrame(raw_data) if raw_data is not None else df_grid
+            if raw_data is None:
+                edited_df = df_grid
+            elif isinstance(raw_data, pd.DataFrame):
+                edited_df = raw_data.reset_index(drop=True)
+            elif isinstance(raw_data, (list, dict)):
+                edited_df = pd.DataFrame(raw_data)
+            else:
+                edited_df = df_grid
 
             # 取得勾選列
             sel_mask = edited_df[SEL_COL].astype(bool) \
