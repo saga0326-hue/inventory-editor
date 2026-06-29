@@ -139,8 +139,11 @@ def build_grid_options(df, id_col="_row_id"):
         suppressColumnMoveAnimation=True,
         rowHeight=32,
     )
-    # 單選模式：每次只能選一列，避免批次錯誤
-    gb.configure_selection("single", use_checkbox=True, pre_selected_rows=[])
+    # 單選模式：點擊列即選取（不使用 checkbox，相容性更好）
+    gb.configure_selection("single", use_checkbox=False,
+                           rowMultiSelectWithClick=False,
+                           suppressRowDeselection=False,
+                           pre_selected_rows=[])
     gb.configure_default_column(editable=True, resizable=True, sortable=False,
                                 filter=False, suppressMenu=True)
     # 隱藏 _row_id
@@ -426,12 +429,19 @@ def main():
             sel_id = int(sel_rows[0]["_row_id"]) \
                      if sel_rows and "_row_id" in sel_rows[0] else None
 
+            if sel_id is not None:
+                sel_name = str(sel_rows[0].get("店號","")) + " " + \
+                           str(sel_rows[0].get("店名",""))
+                st.caption(f"✅ 已選取：{sel_name.strip() or '（空白列）'}")
+            else:
+                st.caption("👆 點擊表格中的列以選取，再按下方按鈕操作")
+
             ba, bb, bc = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下選取列", key=f"cut_{date}")
             del_clicked = bb.button("🗑 刪除選取列", key=f"del_{date}")
 
             if sel_id is None and (cut_clicked or del_clicked):
-                bc.warning("請先在表格中勾選一列")
+                bc.warning("請先點擊表格中的一列來選取")
 
             elif sel_id is not None and cut_clicked:
                 result_rows = []
