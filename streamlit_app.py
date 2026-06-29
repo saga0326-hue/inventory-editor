@@ -35,9 +35,6 @@ FIELD_MAP = {
 COLS      = list(FIELD_MAP.values())
 TYPE_OPTS = ["", "閉", "轉", "解", "續", "FC", "RC"]
 AM_OPTS   = ["", "上午", "下午"]
-PAGE_SIZE = 30
-
-
 def fmt_date(v):
     try:
         dt = pd.to_datetime(str(v).strip())
@@ -48,7 +45,7 @@ def fmt_date(v):
 
 def init():
     defaults = {"tab_data": {}, "date_order": [], "cut_list": [],
-                "inv_key": "", "chg_key": ""}
+                "inv_key": "", "chg_key": "", "na_open": False}
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -144,7 +141,8 @@ def render_sidebar(cols):
         st.markdown("### ✂ 剪下記錄")
 
         # ── 新增資料到剪貼區 ──────────────────────────
-        with st.expander("➕ 新增資料"):
+        with st.expander("➕ 新增資料",
+                         expanded=st.session_state.get("na_open", False)):
             na_am   = st.selectbox("午別", AM_OPTS, key="na_am")
             na_dt   = st.text_input("日期", key="na_dt")
             na_id   = st.text_input("店號", key="na_id")
@@ -166,6 +164,7 @@ def render_sidebar(cols):
                     "vals":  vals,
                     "note":  na_note,
                 })
+                st.session_state.na_open = False   # 收起展開面板
                 st.rerun()
 
         st.divider()
@@ -362,44 +361,34 @@ def main():
             cut_clicked = ba.button("✂ 剪下勾選列", key=f"cut_{date}")
             del_clicked = bb.button("🗑 刪除勾選列", key=f"del_{date}")
 
-            # ── 分頁邏輯 ─────────────────────────────
-            page_key    = f"page_{date}"
-            if page_key not in st.session_state:
-                st.session_state[page_key] = 0
-
-            total_rows  = len(df)
-            total_pages = max(1, (total_rows + PAGE_SIZE - 1) // PAGE_SIZE)
-            # 確保 page 不超出範圍
-            if st.session_state[page_key] >= total_pages:
-                st.session_state[page_key] = total_pages - 1
-            page  = st.session_state[page_key]
-            start = page * PAGE_SIZE
-            end   = min(start + PAGE_SIZE, total_rows)
-
-            df_page = df.iloc[start:end].copy().reset_index(drop=True)
-
-            # 加入勾選欄
-            df_show = df_page.copy()
+            # 加入勾選欄 + 隱藏順序欄（防止點欄位標題排序後順序亂掉）
+            df_show = df.copy()
             df_show.insert(0, "✂", False)
+            df_show.insert(1, "_idx", range(len(df_show)))
 
             edited = st.data_editor(
                 df_show,
-                key=f"ed_{date}_{page}",
-                column_config=get_col_config(cols),
-                column_order=["✂"] + cols,
-                num_rows="fixed",           # 不顯示第二個勾選欄
+                key=f"ed_{date}",
+                column_config={
+                    **get_col_config(cols),
+                    "_idx": st.column_config.Column(disabled=True,
+                                                    width=None,
+                                                    label="_idx"),
+                },
+                column_order=["✂"] + cols,   # 隱藏 _idx（不列入顯示順序）
+                num_rows="fixed",
                 use_container_width=True,
                 hide_index=True,
-                disabled=["✂"] if False else [],   # ✂ 欄位可勾選
             )
+
+            # 無論是否排序，都依 _idx 還原原始順序
+            if "_idx" in edited.columns:
+                edited = edited.sort_values("_idx").reset_index(drop=True)
 
             # 處理剪下（保留空白列）
             if cut_clicked:
-                result_rows = list(df.itertuples(index=False, name=None))
-                result_rows = [{c: df.iloc[j][c] for c in cols}
-                               for j in range(total_rows)]
-                for local_idx, row in edited.iterrows():
-                    global_idx = start + local_idx
+                result_rows = []
+                for _, row in edited.iterrows():
                     if row.get("✂") == True:
                         sid   = str(row.get("店號","")).strip()
                         sname = str(row.get("店名","")).strip()
@@ -407,51 +396,21 @@ def main():
                         st.session_state.cut_list.append(
                             {"sid": sid, "sname": sname,
                              "vals": vals, "note": ""})
-                        result_rows[global_idx] = {c: "" for c in cols}
+                        result_rows.append({c: "" for c in cols})
                     else:
-                        result_rows[global_idx] = {c: row.get(c,"") for c in cols}
+                        result_rows.append({c: row.get(c,"") for c in cols})
                 st.session_state.tab_data[date] = pd.DataFrame(
                     result_rows, columns=cols)
                 st.rerun()
 
             elif del_clicked:
-                keep_rows = []
-                deleted = set()
-                for local_idx, row in edited.iterrows():
-                    if row.get("✂") == True:
-                        deleted.add(start + local_idx)
-                for gi in range(total_rows):
-                    if gi not in deleted:
-                        keep_rows.append({c: df.iloc[gi][c] for c in cols})
-                st.session_state.tab_data[date] = pd.DataFrame(
-                    keep_rows, columns=cols)
+                keep = edited[edited["✂"] != True][cols].reset_index(drop=True)
+                st.session_state.tab_data[date] = keep
                 st.rerun()
 
             else:
-                # 儲存一般編輯（只更新目前頁的範圍）
-                df_full = st.session_state.tab_data[date].copy()
-                for local_idx, row in edited.iterrows():
-                    global_idx = start + local_idx
-                    if global_idx < len(df_full):
-                        for c in cols:
-                            df_full.at[global_idx, c] = row.get(c, "")
-                st.session_state.tab_data[date] = df_full
-
-            # ── 分頁導覽 ──────────────────────────────
-            pa, pb, pc, pd_ = st.columns([1, 1, 2, 4])
-            with pa:
-                if st.button("◀ 上頁", key=f"prev_{date}",
-                             disabled=(page == 0)):
-                    st.session_state[page_key] -= 1
-                    st.rerun()
-            with pb:
-                if st.button("下頁 ▶", key=f"next_{date}",
-                             disabled=(page >= total_pages - 1)):
-                    st.session_state[page_key] += 1
-                    st.rerun()
-            with pc:
-                st.caption(f"第 {page+1} / {total_pages} 頁　"
-                           f"（{start+1}～{end} 列，共 {total_rows} 列）")
+                st.session_state.tab_data[date] = \
+                    edited[cols].reset_index(drop=True)
 
 
 if __name__ == "__main__":
