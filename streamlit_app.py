@@ -122,6 +122,18 @@ def to_excel(tab_data, date_order):
     return buf.getvalue()
 
 
+def style_by_am(df):
+    """上午藍色、下午橘色，空白列無色"""
+    def row_color(row):
+        am = str(row.get("午別", "")).strip()
+        if am == "上午":
+            return ["background-color:#0d2f4f; color:#89c4e1"] * len(row)
+        elif am == "下午":
+            return ["background-color:#3d1f00; color:#ffb347"] * len(row)
+        return ["color:#8888aa"] * len(row)
+    return df.style.apply(row_color, axis=1)
+
+
 def get_col_config(cols):
     cfg = {"✂": st.column_config.CheckboxColumn("選取", width="small", default=False)}
     for c in cols:
@@ -362,6 +374,21 @@ def main():
                     " ".join(str(v) for v in r).lower(), axis=1)
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
+
+            # ── 彩色預覽（上午藍／下午橘）────────────
+            st.markdown(
+                '<span style="display:inline-block;width:14px;height:14px;'
+                'background:#0d2f4f;border-radius:3px;margin-right:4px"></span>'
+                '<span style="color:#89c4e1;font-size:12px">上午</span>'
+                '&nbsp;&nbsp;'
+                '<span style="display:inline-block;width:14px;height:14px;'
+                'background:#3d1f00;border-radius:3px;margin-right:4px"></span>'
+                '<span style="color:#ffb347;font-size:12px">下午</span>',
+                unsafe_allow_html=True)
+            st.dataframe(style_by_am(df), use_container_width=True,
+                         hide_index=True)
+
+            st.caption("⬆ 彩色預覽（唯讀）　｜　⬇ 勾選後可剪下／刪除")
 
             # ── 剪下 / 刪除按鈕 ──────────────────────
             ba, bb, _ = st.columns([1, 1, 4])
