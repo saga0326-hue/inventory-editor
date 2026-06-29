@@ -450,10 +450,16 @@ def main():
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
 
-            # 加入 _row_id（隱藏）和 ☑ 欄（資料型 checkbox，無延遲）
+            # 從 session_state 恢復上次勾選的 row_id（跨 rerun 保持勾選）
+            sel_key = f"sel_{date}"
+            stored_sel = st.session_state.get(sel_key)
+
+            # 加入 _row_id（隱藏）和 ☑ 欄，依 stored_sel 恢復勾選狀態
             df_grid = df.copy()
             df_grid.insert(0, "_row_id", range(len(df_grid)))
-            df_grid.insert(1, SEL_COL, False)
+            df_grid.insert(1, SEL_COL,
+                           df_grid["_row_id"] == stored_sel if stored_sel is not None
+                           else False)
 
             grid_opts = build_grid_options(df_grid)
             response  = AgGrid(
@@ -467,15 +473,20 @@ def main():
                 key=f"grid_{date}",
             )
 
-            # 從 response["data"] 讀取（比 selected_rows 即時）
+            # 從 response["data"] 讀取最新狀態
             raw_data = response["data"]
             edited_df = pd.DataFrame(raw_data) if raw_data is not None else df_grid
 
-            # 取得勾選列（讀資料欄，無延遲）
+            # 取得勾選列
             sel_mask = edited_df[SEL_COL].astype(bool) \
-                       if SEL_COL in edited_df.columns else pd.Series(False, index=edited_df.index)
+                       if SEL_COL in edited_df.columns \
+                       else pd.Series(False, index=edited_df.index)
             sel_rows_df = edited_df[sel_mask]
-            sel_id = int(sel_rows_df.iloc[0]["_row_id"]) if len(sel_rows_df) > 0 else None
+            sel_id = int(sel_rows_df.iloc[0]["_row_id"]) \
+                     if len(sel_rows_df) > 0 else None
+
+            # 更新 session_state 選取記憶（勾選/取消都記錄）
+            st.session_state[sel_key] = sel_id
 
             # 儲存編輯（去掉輔助欄）
             st.session_state.tab_data[date] = \
@@ -491,7 +502,14 @@ def main():
                                str(r.get("店名",""))).strip() or "（空白列）",
                 }
 
-            st.caption("☑ 勾選一列後，點下方按鈕操作；或到左側剪貼區點「📍 插入到點選位置」")
+            # 顯示目前選取狀態
+            if sel_id is not None:
+                r = sel_rows_df.iloc[0]
+                sel_label = (str(r.get("店號","")) + " " +
+                             str(r.get("店名",""))).strip() or "（空白列）"
+                st.caption(f"✅ 已選取：{sel_label}　｜　再按下方按鈕操作")
+            else:
+                st.caption("☑ 勾選一列後，點下方按鈕操作")
 
             ba, bb, bc = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下選取列", key=f"cut_{date}")
@@ -516,6 +534,7 @@ def main():
                         result_rows.append({c: row.get(c,"") for c in cols})
                 st.session_state.tab_data[date] = pd.DataFrame(
                     result_rows, columns=cols)
+                st.session_state[sel_key] = None   # 清除選取記憶
                 st.rerun()
 
             elif sel_id is not None and del_clicked:
@@ -526,6 +545,7 @@ def main():
                 ]
                 st.session_state.tab_data[date] = pd.DataFrame(
                     keep_rows, columns=cols)
+                st.session_state[sel_key] = None   # 清除選取記憶
                 st.rerun()
 
             total = len(st.session_state.tab_data[date])
