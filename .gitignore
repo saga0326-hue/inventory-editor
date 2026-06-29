@@ -1,0 +1,7 @@
+*.xlsx
+*.xls
+__pycache__/
+*.pyc
+.env
+inventory_editor.py
+check_inventory.py
