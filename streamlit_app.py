@@ -54,7 +54,8 @@ def fmt_date(v):
 
 def init():
     defaults = {"tab_data": {}, "date_order": [], "cut_list": [],
-                "inv_key": "", "chg_key": "", "na_open": False}
+                "inv_key": "", "chg_key": "", "na_open": False,
+                "click_pos": None}   # {date, row_id, label} 點選的插入目標
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -197,6 +198,14 @@ def render_sidebar(cols):
 
         st.divider()
 
+        # 顯示目前點選的插入目標
+        cp = st.session_state.get("click_pos")
+        if cp:
+            st.info(f"📍 插入目標：**{cp['date']}** 第{cp['row_id']+1}列後\n\n"
+                    f"（{cp['label']}）")
+        else:
+            st.caption("💡 先在表格點選一列，可快速插入到該位置")
+
         if not st.session_state.cut_list:
             st.caption("目前沒有剪下的資料")
             return
@@ -226,6 +235,35 @@ def render_sidebar(cols):
                           if vals.get("型態","") in TYPE_OPTS else 0,
                     key=f"ty_{i}")
 
+                # ── 方法一：點選位置快速插入 ──────────
+                cp = st.session_state.get("click_pos")
+                if cp:
+                    cp_date  = cp["date"]
+                    cp_rid   = cp["row_id"]   # 插入在此 row_id 之後
+                    cp_label = cp["label"]
+                    target_date_ok = (not dt_v) or (dt_v == cp_date)
+                    if not target_date_ok:
+                        st.warning(f"⚠️ 日期不符：資料 **{dt_v}**，點選位置分頁 **{cp_date}**")
+                    if st.button(f"📍 插入到點選位置（{cp_date} {cp_label}）後",
+                                 key=f"qins_{i}"):
+                        new_vals = dict(vals)
+                        new_vals.update({"午別": am_v, "日期": dt_v, "型態": ty_v})
+                        tdf2 = st.session_state.tab_data.get(
+                            cp_date, pd.DataFrame(columns=cols)).copy()
+                        nr   = pd.DataFrame([{c: new_vals.get(c,"") for c in cols}])
+                        # 找 cp_rid 在目前 tdf2 中的位置
+                        insert_after = cp_rid + 1  # 原始 row_id 即為 index
+                        tdf2 = pd.concat(
+                            [tdf2.iloc[:insert_after], nr,
+                             tdf2.iloc[insert_after:]],
+                            ignore_index=True)
+                        st.session_state.tab_data[cp_date] = tdf2
+                        st.session_state.cut_list.pop(i)
+                        st.session_state.click_pos = None
+                        st.rerun()
+                    st.markdown("─── 或選擇其他位置 ───")
+
+                # ── 方法二：下拉選單插入 ───────────────
                 tdate = st.selectbox("插入到分頁",
                     date_order, key=f"td_{i}")
                 tdf   = st.session_state.tab_data.get(tdate, pd.DataFrame())
@@ -429,10 +467,17 @@ def main():
             sel_id = int(sel_rows[0]["_row_id"]) \
                      if sel_rows and "_row_id" in sel_rows[0] else None
 
+            # 點選列時更新 click_pos（供側邊欄快速插入使用）
             if sel_id is not None:
-                sel_name = str(sel_rows[0].get("店號","")) + " " + \
-                           str(sel_rows[0].get("店名",""))
-                st.caption(f"✅ 已選取：{sel_name.strip() or '（空白列）'}")
+                sel_name = (str(sel_rows[0].get("店號","")) + " " +
+                            str(sel_rows[0].get("店名",""))).strip()
+                st.session_state.click_pos = {
+                    "date":   date,
+                    "row_id": sel_id,
+                    "label":  sel_name or "（空白列）",
+                }
+                st.caption(f"✅ 已選取：{sel_name or '（空白列）'}　｜　"
+                           "可到左側剪貼區點「📍 插入到點選位置」")
             else:
                 st.caption("👆 點擊表格中的列以選取，再按下方按鈕操作")
 
