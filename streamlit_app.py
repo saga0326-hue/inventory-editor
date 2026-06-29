@@ -485,10 +485,13 @@ def main():
             else:
                 edited_df = df_grid
 
-            # 取得勾選列
-            sel_mask = edited_df[SEL_COL].astype(bool) \
-                       if SEL_COL in edited_df.columns \
-                       else pd.Series(False, index=edited_df.index)
+            # 取得勾選列（JSON 模式可能回傳字串 "True"/"False"，需統一處理）
+            if SEL_COL in edited_df.columns:
+                sel_mask = edited_df[SEL_COL].map(
+                    lambda v: str(v).strip().lower() in ("true", "1", "yes")
+                )
+            else:
+                sel_mask = pd.Series(False, index=edited_df.index)
             sel_rows_df = edited_df[sel_mask]
             sel_id = int(sel_rows_df.iloc[0]["_row_id"]) \
                      if len(sel_rows_df) > 0 else None
