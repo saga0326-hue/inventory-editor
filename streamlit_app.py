@@ -3,15 +3,12 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from collections import defaultdict
+from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode
 
 st.set_page_config(page_title="盤點資料編輯器", page_icon="📋", layout="wide")
 
 st.markdown("""
 <style>
-/* 禁止欄位拖移（隱藏拖曳游標） */
-[data-testid="column-header-cell"] { cursor: default !important; }
-[class*="dvn-drag"] { display: none !important; }
-
 [data-testid="stSidebar"] { background:#2e1e1e; }
 [data-testid="stSidebar"] * { color:#cdd6f4; }
 .dup-bar  { background:#3a1010; border-radius:8px; padding:10px 16px; margin-bottom:8px; }
@@ -35,6 +32,18 @@ FIELD_MAP = {
 COLS      = list(FIELD_MAP.values())
 TYPE_OPTS = ["", "閉", "轉", "解", "續", "FC", "RC"]
 AM_OPTS   = ["", "上午", "下午"]
+
+ROW_STYLE = JsCode("""
+function(params) {
+    if (!params.data) return {};
+    var am = params.data['午別'];
+    if (am === '上午') return {'background-color':'#0d2f4f','color':'#89c4e1'};
+    if (am === '下午') return {'background-color':'#3d1f00','color':'#ffb347'};
+    return {'color':'#aaaacc'};
+}
+""")
+
+
 def fmt_date(v):
     try:
         dt = pd.to_datetime(str(v).strip())
@@ -106,7 +115,7 @@ def find_dups(tab_data):
         if "店號" not in df.columns:
             continue
         for _, row in df.iterrows():
-            sid   = str(row.get("店號","")).strip()
+            sid = str(row.get("店號","")).strip()
             sname = str(row.get("店名","")).strip()
             if sid and sid not in ("", "nan"):
                 store_map[sid].append((date, sname))
@@ -122,37 +131,38 @@ def to_excel(tab_data, date_order):
     return buf.getvalue()
 
 
-def style_by_am(df):
-    """上午藍色、下午橘色，空白列無色"""
-    def row_color(row):
-        am = str(row.get("午別", "")).strip()
-        if am == "上午":
-            return ["background-color:#0d2f4f; color:#89c4e1"] * len(row)
-        elif am == "下午":
-            return ["background-color:#3d1f00; color:#ffb347"] * len(row)
-        return ["color:#8888aa"] * len(row)
-    return df.style.apply(row_color, axis=1)
-
-
-def get_col_config(cols):
-    cfg = {"✂": st.column_config.CheckboxColumn("選取", width="small", default=False)}
-    for c in cols:
-        if c == "午別":
-            cfg[c] = st.column_config.SelectboxColumn(c, options=AM_OPTS, width="small")
-        elif c == "型態":
-            cfg[c] = st.column_config.SelectboxColumn(c, options=TYPE_OPTS, width="small")
-        elif c in ("日期","店號","課別"):
-            cfg[c] = st.column_config.TextColumn(c, width="small")
-        else:
-            cfg[c] = st.column_config.TextColumn(c, width="medium")
-    return cfg
+def build_grid_options(df):
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_grid_options(
+        getRowStyle=ROW_STYLE,
+        suppressMovableColumns=True,
+        suppressColumnMoveAnimation=True,
+        rowHeight=32,
+    )
+    gb.configure_selection("multiple", use_checkbox=True, pre_selected_rows=[])
+    gb.configure_default_column(editable=True, resizable=True, sortable=False,
+                                filter=False, suppressMenu=True)
+    gb.configure_column("午別",
+        cellEditor="agSelectCellEditor",
+        cellEditorParams={"values": AM_OPTS},
+        width=80, minWidth=60)
+    gb.configure_column("型態",
+        cellEditor="agSelectCellEditor",
+        cellEditorParams={"values": TYPE_OPTS},
+        width=75, minWidth=60)
+    gb.configure_column("日期",   width=70,  minWidth=55)
+    gb.configure_column("店號",   width=90,  minWidth=70)
+    gb.configure_column("課別",   width=70,  minWidth=55)
+    gb.configure_column("店名",   width=120, minWidth=80)
+    gb.configure_column("預定盤點者", width=100, minWidth=70)
+    gb.configure_column("備註",   width=150, minWidth=80)
+    return gb.build()
 
 
 def render_sidebar(cols):
     with st.sidebar:
         st.markdown("### ✂ 剪下記錄")
 
-        # ── 新增資料到剪貼區 ──────────────────────────
         with st.expander("➕ 新增資料",
                          expanded=st.session_state.get("na_open", False)):
             na_am   = st.selectbox("午別", AM_OPTS, key="na_am")
@@ -176,7 +186,7 @@ def render_sidebar(cols):
                     "vals":  vals,
                     "note":  na_note,
                 })
-                st.session_state.na_open = False   # 收起展開面板
+                st.session_state.na_open = False
                 st.rerun()
 
         st.divider()
@@ -195,12 +205,10 @@ def render_sidebar(cols):
                                            vals.get("午別",""),
                                            vals.get("型態","")]))
             label = f"**{sid}** {sname}" + (f" ｜ {tag}" if tag else "")
-            if note:
-                label += f"\n_{note}_"
 
             with st.expander(label):
                 if note:
-                    st.caption(f"📝 說明：{note}")
+                    st.caption(f"📝 {note}")
                 am_v = st.selectbox("午別", AM_OPTS,
                     index=AM_OPTS.index(vals.get("午別",""))
                           if vals.get("午別","") in AM_OPTS else 0,
@@ -216,6 +224,10 @@ def render_sidebar(cols):
                     date_order, key=f"td_{i}")
                 tdf   = st.session_state.tab_data.get(tdate, pd.DataFrame())
 
+                date_ok = (not dt_v) or (dt_v == tdate)
+                if not date_ok:
+                    st.warning(f"⚠️ 日期不符：資料 **{dt_v}**，分頁 **{tdate}**")
+
                 blank_opts = [
                     f"▶ 空白列 第{j+1}列（覆蓋）"
                     for j, r in tdf.iterrows()
@@ -230,13 +242,6 @@ def render_sidebar(cols):
                              for j, r in tdf.iterrows()])
                 pos_label = st.selectbox("插入位置",
                     row_opts, key=f"pos_{i}")
-
-                # ── 日期不符提示 ──────────────────────
-                date_ok = (not dt_v) or (dt_v == tdate)
-                if not date_ok:
-                    st.warning(
-                        f"⚠️ 日期不符：資料日期 **{dt_v}**，"
-                        f"分頁日期 **{tdate}**")
 
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -275,11 +280,8 @@ def render_sidebar(cols):
 # ════════════════════════════════════════════════════
 def main():
     init()
-
-    # 縮小標題
     st.markdown("#### 📋 盤點資料編輯器")
 
-    # ── 工具列 ────────────────────────────────────────
     c1, c2, c3 = st.columns([2, 2, 2])
 
     with c1:
@@ -304,7 +306,7 @@ def main():
                 cols    = list(list(st.session_state.tab_data.values())[0].columns)
                 entries = load_change(chg_file, cols)
                 st.session_state.cut_list.extend(entries)
-                st.success(f"異動名單載入 {len(entries)} 筆至左側剪貼區")
+                st.success(f"異動名單載入 {len(entries)} 筆")
 
     with c3:
         if st.session_state.tab_data:
@@ -317,13 +319,11 @@ def main():
 
     if not st.session_state.tab_data:
         st.info("請先匯入盤點表 Excel 檔案。")
-        # 還是要渲染側邊欄，讓使用者可以手動新增資料
         render_sidebar([])
         return
 
     st.divider()
 
-    # ── 重複店號警示 ──────────────────────────────────
     dups = find_dups(st.session_state.tab_data)
     if dups:
         chips = "".join(
@@ -339,7 +339,6 @@ def main():
     else:
         st.success("✅ 無重複店號")
 
-    # ── 搜尋列 ────────────────────────────────────────
     search_kw = st.text_input("🔍 搜尋（跨所有分頁）",
                                placeholder="輸入店號、店名、日期…")
     if search_kw:
@@ -355,11 +354,22 @@ def main():
 
     st.divider()
 
-    # ── 側邊欄 ────────────────────────────────────────
     cols_global = list(list(st.session_state.tab_data.values())[0].columns)
     render_sidebar(cols_global)
 
-    # ── 分頁資料表 ────────────────────────────────────
+    # 圖例
+    st.markdown(
+        '<span style="display:inline-block;width:14px;height:14px;'
+        'background:#0d2f4f;border-radius:3px;margin-right:4px;vertical-align:middle"></span>'
+        '<span style="color:#89c4e1;font-size:12px">上午</span>'
+        '&nbsp;&nbsp;&nbsp;'
+        '<span style="display:inline-block;width:14px;height:14px;'
+        'background:#3d1f00;border-radius:3px;margin-right:4px;vertical-align:middle"></span>'
+        '<span style="color:#ffb347;font-size:12px">下午</span>'
+        '&nbsp;&nbsp;&nbsp;'
+        '<span style="font-size:11px;color:#888">（勾選列後點剪下／刪除）</span>',
+        unsafe_allow_html=True)
+
     date_order = st.session_state.date_order
     tabs = st.tabs([f" {d} " for d in date_order])
 
@@ -375,61 +385,44 @@ def main():
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
 
-            # ── 彩色預覽（上午藍／下午橘）────────────
-            st.markdown(
-                '<span style="display:inline-block;width:14px;height:14px;'
-                'background:#0d2f4f;border-radius:3px;margin-right:4px"></span>'
-                '<span style="color:#89c4e1;font-size:12px">上午</span>'
-                '&nbsp;&nbsp;'
-                '<span style="display:inline-block;width:14px;height:14px;'
-                'background:#3d1f00;border-radius:3px;margin-right:4px"></span>'
-                '<span style="color:#ffb347;font-size:12px">下午</span>',
-                unsafe_allow_html=True)
-            st.dataframe(style_by_am(df), use_container_width=True,
-                         hide_index=True)
+            grid_opts = build_grid_options(df)
+            response  = AgGrid(
+                df,
+                gridOptions=grid_opts,
+                update_mode=GridUpdateMode.MODEL_CHANGED,
+                allow_unsafe_jscode=True,
+                theme="balham-dark",
+                use_container_width=True,
+                height=min(60 + len(df) * 33, 800),
+                key=f"grid_{date}",
+            )
 
-            st.caption("⬆ 彩色預覽（唯讀）　｜　⬇ 勾選後可剪下／刪除")
+            # 取回編輯後的資料並儲存
+            edited_df = pd.DataFrame(response["data"])[cols] \
+                        if response["data"] is not None else df
+            st.session_state.tab_data[date] = edited_df.reset_index(drop=True)
 
-            # ── 剪下 / 刪除按鈕 ──────────────────────
+            # 取得勾選列
+            sel_rows = response["selected_rows"] or []
+
             ba, bb, _ = st.columns([1, 1, 4])
             cut_clicked = ba.button("✂ 剪下勾選列", key=f"cut_{date}")
             del_clicked = bb.button("🗑 刪除勾選列", key=f"del_{date}")
 
-            # 加入勾選欄 + 隱藏順序欄（防止點欄位標題排序後順序亂掉）
-            df_show = df.copy()
-            df_show.insert(0, "✂", False)
-            df_show.insert(1, "_idx", range(len(df_show)))
-
-            edited = st.data_editor(
-                df_show,
-                key=f"ed_{date}",
-                column_config={
-                    **get_col_config(cols),
-                    "_idx": st.column_config.Column(disabled=True,
-                                                    width=None,
-                                                    label="_idx"),
-                },
-                column_order=["✂"] + cols,   # 隱藏 _idx（不列入顯示順序）
-                num_rows="fixed",
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            # 無論是否排序，都依 _idx 還原原始順序
-            if "_idx" in edited.columns:
-                edited = edited.sort_values("_idx").reset_index(drop=True)
-
-            # 處理剪下（保留空白列）
-            if cut_clicked:
+            if sel_rows and cut_clicked:
+                sel_keys = {(str(r.get("店號","")), str(r.get("店名","")))
+                            for r in sel_rows}
                 result_rows = []
-                for _, row in edited.iterrows():
-                    if row.get("✂") == True:
-                        sid   = str(row.get("店號","")).strip()
-                        sname = str(row.get("店名","")).strip()
-                        vals  = {c: str(row.get(c,"")) for c in cols}
-                        st.session_state.cut_list.append(
-                            {"sid": sid, "sname": sname,
-                             "vals": vals, "note": ""})
+                for _, row in edited_df.iterrows():
+                    k = (str(row.get("店號","")), str(row.get("店名","")))
+                    if k in sel_keys:
+                        vals = {c: str(row.get(c,"")) for c in cols}
+                        st.session_state.cut_list.append({
+                            "sid":   str(row.get("店號","")),
+                            "sname": str(row.get("店名","")),
+                            "vals":  vals,
+                            "note":  "",
+                        })
                         result_rows.append({c: "" for c in cols})
                     else:
                         result_rows.append({c: row.get(c,"") for c in cols})
@@ -437,14 +430,23 @@ def main():
                     result_rows, columns=cols)
                 st.rerun()
 
-            elif del_clicked:
-                keep = edited[edited["✂"] != True][cols].reset_index(drop=True)
+            elif sel_rows and del_clicked:
+                sel_keys = {(str(r.get("店號","")), str(r.get("店名","")))
+                            for r in sel_rows}
+                keep = edited_df[
+                    ~edited_df.apply(
+                        lambda r: (str(r.get("店號","")),
+                                   str(r.get("店名",""))) in sel_keys,
+                        axis=1)
+                ].reset_index(drop=True)
                 st.session_state.tab_data[date] = keep
                 st.rerun()
 
-            else:
-                st.session_state.tab_data[date] = \
-                    edited[cols].reset_index(drop=True)
+            total = len(st.session_state.tab_data[date])
+            blank = (st.session_state.tab_data[date]
+                     .apply(lambda r: all(str(v).strip() in ("","nan")
+                                         for v in r), axis=1).sum())
+            st.caption(f"共 {total} 列，其中 {blank} 列空白")
 
 
 if __name__ == "__main__":
