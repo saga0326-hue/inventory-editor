@@ -150,18 +150,18 @@ function(params) {
         rowHeight=32,
         isRowSelectable=lock_others,
     )
-    # 單選模式 + checkbox：勾一個後其他自動無法再勾
-    gb.configure_selection("single", use_checkbox=True,
-                           header_checkbox=False,
-                           pre_selected_rows=[])
+    # 單選模式（checkbox 直接綁在 午別 欄位，避免被隱藏欄吃掉）
+    gb.configure_selection("single", use_checkbox=False, pre_selected_rows=[])
     gb.configure_default_column(editable=True, resizable=True, sortable=False,
                                 filter=False, suppressMenu=True)
     # 隱藏 _row_id
     gb.configure_column(id_col, hide=True, editable=False)
     gb.configure_column("午別",
+        checkboxSelection=True,       # checkbox 顯示在此欄
+        headerCheckboxSelection=False,
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": AM_OPTS},
-        width=80, minWidth=60)
+        width=110, minWidth=90)
     gb.configure_column("型態",
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": TYPE_OPTS},
