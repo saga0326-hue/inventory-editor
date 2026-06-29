@@ -134,16 +134,25 @@ def to_excel(tab_data, date_order):
 
 def build_grid_options(df, id_col="_row_id"):
     gb = GridOptionsBuilder.from_dataframe(df)
+    lock_others = JsCode("""
+function(params) {
+    var api = params.api;
+    if (!api) return true;
+    var selected = api.getSelectedRows();
+    if (selected.length === 0) return true;
+    return params.node.isSelected();
+}
+""")
     gb.configure_grid_options(
         getRowStyle=ROW_STYLE,
         suppressMovableColumns=True,
         suppressColumnMoveAnimation=True,
         rowHeight=32,
+        isRowSelectable=lock_others,
     )
-    # 單選模式：點擊列即選取（不使用 checkbox，相容性更好）
-    gb.configure_selection("single", use_checkbox=False,
-                           rowMultiSelectWithClick=False,
-                           suppressRowDeselection=False,
+    # 單選模式 + checkbox：勾一個後其他自動無法再勾
+    gb.configure_selection("single", use_checkbox=True,
+                           header_checkbox=False,
                            pre_selected_rows=[])
     gb.configure_default_column(editable=True, resizable=True, sortable=False,
                                 filter=False, suppressMenu=True)
