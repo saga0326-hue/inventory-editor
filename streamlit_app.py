@@ -467,7 +467,7 @@ def main():
                 gridOptions=grid_opts,
                 update_mode=GridUpdateMode.VALUE_CHANGED,
                 allow_unsafe_jscode=True,
-                theme="balham-dark",
+                theme="dark",
                 use_container_width=True,
                 height=min(60 + len(df) * 33, 800),
                 key=f"grid_{date}",
