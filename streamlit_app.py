@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
+import pyarrow as pa
 from io import BytesIO
 from collections import defaultdict
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode
@@ -132,7 +133,32 @@ def to_excel(tab_data, date_order):
     return buf.getvalue()
 
 
-SEL_COL = "☑"   # 保留常數供相容性，實際改用內建 rowSelection
+def fix_arrow_types(df: pd.DataFrame) -> pd.DataFrame:
+    """將字串欄轉成 ArrowDtype(pa.string())，確保序列化用 Utf8 而非 LargeUtf8。
+    pandas 2.x 字串欄 dtype 是 StringDtype，不是 object，需用 is_string_dtype 偵測。"""
+    result = df.copy()
+    for col in result.columns:
+        if (pd.api.types.is_string_dtype(result[col])
+                and not pd.api.types.is_bool_dtype(result[col])):
+            result[col] = result[col].fillna("").astype(pd.ArrowDtype(pa.string()))
+    return result
+
+
+SEL_COL = "☑"
+
+SINGLE_SELECT_SETTER = JsCode("""
+function(params) {
+    if (params.newValue === true) {
+        params.api.forEachNode(function(node) {
+            if (node.rowIndex !== params.node.rowIndex && node.data['☑']) {
+                node.setDataValue('☑', false);
+            }
+        });
+    }
+    params.data['☑'] = params.newValue;
+    return true;
+}
+""")
 
 
 def build_grid_options(df):
@@ -147,10 +173,14 @@ def build_grid_options(df):
                                 filter=False, suppressMenu=True)
     # 隱藏 _row_id
     gb.configure_column("_row_id", hide=True, editable=False)
-    # 單選模式：checkbox 顯示在午別欄左側
-    gb.configure_selection(selection_mode="single",
-                           use_checkbox=True,
-                           pre_selected_rows=[])
+    # ☑ 欄：checkbox 單選
+    gb.configure_column(SEL_COL,
+        editable=True,
+        cellEditor="agCheckboxCellEditor",
+        cellRenderer="agCheckboxCellRenderer",
+        valueSetter=SINGLE_SELECT_SETTER,
+        width=45, minWidth=40, maxWidth=50,
+        headerName="")
     gb.configure_column("午別",
         cellEditor="agSelectCellEditor",
         cellEditorParams={"values": AM_OPTS},
@@ -431,86 +461,64 @@ def main():
                 if mask.any():
                     st.info(f"此分頁有 {mask.sum()} 筆符合「{search_kw}」")
 
-            # 加入隱藏 _row_id 供精準比對
             sel_key = f"sel_{date}"
             stored_sel = st.session_state.get(sel_key)
 
             df_grid = df.copy()
             df_grid.insert(0, "_row_id", range(len(df_grid)))
-
-            # 預先選取上次勾選的列
-            pre_sel = []
-            if stored_sel is not None:
-                matches = df_grid.index[df_grid["_row_id"] == stored_sel].tolist()
-                if matches:
-                    pre_sel = [matches[0]]
+            df_grid.insert(1, SEL_COL,
+                           df_grid["_row_id"] == stored_sel if stored_sel is not None
+                           else False)
 
             grid_opts = build_grid_options(df_grid)
-            # 把 pre_selected_rows 寫入 gridOptions
-            grid_opts["preSelectedRows"] = pre_sel
-
             response = AgGrid(
-                df_grid,
+                fix_arrow_types(df_grid),
                 gridOptions=grid_opts,
-                update_mode=GridUpdateMode.SELECTION_CHANGED,
+                update_mode=GridUpdateMode.VALUE_CHANGED,
                 allow_unsafe_jscode=True,
                 theme="dark",
                 use_container_width=True,
-                use_json_serialization=True,
                 height=min(60 + len(df) * 33, 800),
                 key=f"grid_{date}",
             )
 
-            # 讀取編輯後的資料
+            # 讀取回傳資料
             raw_data = response["data"]
             if raw_data is None:
                 edited_df = df_grid
             elif isinstance(raw_data, pd.DataFrame):
                 edited_df = raw_data.reset_index(drop=True)
-            elif isinstance(raw_data, (list, dict)):
+            else:
                 edited_df = pd.DataFrame(raw_data)
-            else:
-                edited_df = df_grid
 
-            # 讀取選取列（selected_rows 在 1.2.1 回傳 DataFrame 或 list）
-            sel_rows_raw = response["selected_rows"]
-            if sel_rows_raw is None:
-                sel_rows_df = pd.DataFrame()
-            elif isinstance(sel_rows_raw, pd.DataFrame):
-                sel_rows_df = sel_rows_raw
+            # 讀取勾選狀態（回傳值可能是 bool 或 字串）
+            if SEL_COL in edited_df.columns:
+                sel_mask = edited_df[SEL_COL].map(
+                    lambda v: v is True or str(v).strip().lower() in ("true", "1")
+                )
             else:
-                sel_rows_df = pd.DataFrame(sel_rows_raw)
+                sel_mask = pd.Series(False, index=edited_df.index)
+            sel_rows_df = edited_df[sel_mask]
+            sel_id = int(sel_rows_df.iloc[0]["_row_id"]) \
+                     if len(sel_rows_df) > 0 else None
 
-            if len(sel_rows_df) > 0 and "_row_id" in sel_rows_df.columns:
-                sel_id = int(sel_rows_df.iloc[0]["_row_id"])
-            else:
-                sel_id = stored_sel   # selection 沒變化時保留上次
-
-            # 更新 session_state 選取記憶
             st.session_state[sel_key] = sel_id
 
             # 儲存編輯（去掉輔助欄）
             st.session_state.tab_data[date] = \
                 edited_df[cols].reset_index(drop=True)
 
-            # 取得選取列的資料（sel_rows_df 可能為空，用 edited_df 補回）
             if sel_id is not None:
-                sel_row_data = edited_df[edited_df["_row_id"] == sel_id]
-                if len(sel_row_data) > 0:
-                    r = sel_row_data.iloc[0]
-                    sel_label = (str(r.get("店號","")) + " " +
-                                 str(r.get("店名",""))).strip() or "（空白列）"
-                else:
-                    sel_label = f"第{sel_id+1}列"
-                    r = None
+                r = sel_rows_df.iloc[0] if len(sel_rows_df) > 0 else None
+                sel_label = (
+                    (str(r.get("店號","")) + " " + str(r.get("店名",""))).strip()
+                    if r is not None else f"第{sel_id+1}列"
+                ) or "（空白列）"
                 st.session_state.click_pos = {
-                    "date":   date,
-                    "row_id": sel_id,
-                    "label":  sel_label,
+                    "date": date, "row_id": sel_id, "label": sel_label,
                 }
                 st.caption(f"✅ 已選取：{sel_label}　｜　再按下方按鈕操作")
             else:
-                r = None
                 st.caption("☑ 勾選一列後，點下方按鈕操作")
 
             ba, bb, bc = st.columns([1, 1, 4])
